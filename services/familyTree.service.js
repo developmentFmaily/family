@@ -2,65 +2,8 @@ const { FamilyTree, familyTreeSchema } = require('../models/FamilyTree');
 const { User } = require('../models/User');
 const sequelize = require('../config/db');
 
-// Import models to ensure associations are initialized
-require('../models');
 const ERROR_MESSAGES = require('../utils/messages.error');
 const SUCCESS_MESSAGES = require('../utils/messages.success');
-
-// Get complete family tree structure
-module.exports.getFamilyTree = async (userId = null) => {
-  try {
-    let whereClause = { isdeleted: false };
-    
-    // If userId provided, get tree starting from that user
-    if (userId) {
-      whereClause = {
-        ...whereClause,
-        [sequelize.Sequelize.Op.or]: [
-          { parent_id: userId },
-          { child_id: userId }
-        ]
-      };
-    }
-
-    const relationships = await FamilyTree.findAll({
-      where: whereClause,
-      include: [
-        {
-          model: User,
-          as: 'parent',
-          attributes: ['id', 'fullname', 'mobilenumber', 'profileimageurl', 'birthdate', 'gender', 'key_person_in_family']
-        },
-        {
-          model: User,
-          as: 'child',
-          attributes: ['id', 'fullname', 'mobilenumber', 'profileimageurl', 'birthdate', 'gender', 'key_person_in_family']
-        }
-      ],
-      order: [['createdat', 'ASC']]
-    });
-
-    // Build hierarchical tree structure
-    const treeStructure = buildTreeStructure(relationships, userId);
-
-    return {
-      success: true,
-      data: {
-        tree: treeStructure,
-        totalRelationships: relationships.length
-      },
-      message: SUCCESS_MESSAGES.FAMILY_TREE_FETCHED
-    };
-  } catch (err) {
-    console.error('Error in getFamilyTree:', err);
-    
-    if (err.name === 'SequelizeDatabaseError') {
-      throw new Error(ERROR_MESSAGES.SERVER_ERROR);
-    }
-    
-    throw new Error(ERROR_MESSAGES.SERVER_ERROR);
-  }
-};
 
 // Add family member relationship
 module.exports.addFamilyMember = async (relationshipData, transaction) => {
@@ -245,162 +188,6 @@ module.exports.removeFamilyMember = async (relationshipId, transaction) => {
   }
 };
 
-// Search family members
-module.exports.searchFamilyMembers = async (searchParams) => {
-  try {
-    const {
-      name,
-      relationship_type,
-      birthdate_from,
-      birthdate_to,
-      is_primary_contact,
-      page = 1,
-      limit = 20
-    } = searchParams;
-
-    // Build where clause
-    const whereClause = { isdeleted: false };
-    const userWhereClause = { isdeleted: false };
-
-    // Name search
-    if (name) {
-      userWhereClause.fullname = {
-        [sequelize.Sequelize.Op.iLike]: `%${name}%`
-      };
-    }
-
-    // Relationship type filter
-    if (relationship_type) {
-      whereClause.relationship_type = relationship_type;
-    }
-
-    // Birthdate range filter
-    if (birthdate_from || birthdate_to) {
-      userWhereClause.birthdate = {};
-      if (birthdate_from) userWhereClause.birthdate[sequelize.Sequelize.Op.gte] = birthdate_from;
-      if (birthdate_to) userWhereClause.birthdate[sequelize.Sequelize.Op.lte] = birthdate_to;
-    }
-
-    // Primary contact filter
-    if (is_primary_contact !== undefined) {
-      whereClause.is_primary_contact = is_primary_contact;
-    }
-
-    const offset = (page - 1) * limit;
-
-    const { count, rows } = await FamilyTree.findAndCountAll({
-      where: whereClause,
-      include: [
-        {
-          model: User,
-          as: 'parent',
-          attributes: ['id', 'fullname', 'mobilenumber', 'profileimageurl', 'birthdate', 'gender', 'key_person_in_family'],
-          where: userWhereClause,
-          required: false
-        },
-        {
-          model: User,
-          as: 'child',
-          attributes: ['id', 'fullname', 'mobilenumber', 'profileimageurl', 'birthdate', 'gender', 'key_person_in_family'],
-          where: userWhereClause,
-          required: true
-        }
-      ],
-      limit: parseInt(limit),
-      offset: offset,
-      order: [['is_primary_contact', 'DESC'], ['createdat', 'ASC']]
-    });
-
-    const totalPages = Math.ceil(count / limit);
-    const hasNextPage = page < totalPages;
-    const hasPrevPage = page > 1;
-
-    return {
-      success: true,
-      data: {
-        relationships: rows,
-        pagination: {
-          currentPage: parseInt(page),
-          totalPages: totalPages,
-          totalCount: count,
-          hasNextPage: hasNextPage,
-          hasPrevPage: hasPrevPage,
-          limit: parseInt(limit)
-        }
-      },
-      message: SUCCESS_MESSAGES.FAMILY_MEMBERS_FOUND
-    };
-  } catch (err) {
-    console.error('Error in searchFamilyMembers:', err);
-    
-    if (err.name === 'SequelizeDatabaseError') {
-      throw new Error(ERROR_MESSAGES.SERVER_ERROR);
-    }
-    
-    throw new Error(ERROR_MESSAGES.SERVER_ERROR);
-  }
-};
-
-// Get family directory (primary contacts)
-module.exports.getFamilyDirectory = async (queryParams) => {
-  try {
-    const {
-      sort_by = 'fullname',
-      sort_order = 'ASC',
-      page = 1,
-      limit = 20
-    } = queryParams;
-
-    const offset = (page - 1) * limit;
-
-    const { count, rows } = await FamilyTree.findAndCountAll({
-      where: {
-        isdeleted: false,
-        is_primary_contact: true
-      },
-      include: [
-        {
-          model: User,
-          as: 'child',
-          attributes: ['id', 'fullname', 'mobilenumber', 'profileimageurl', 'birthdate', 'gender', 'key_person_in_family', 'current_city', 'current_state', 'current_country'],
-          order: [[sort_by, sort_order]]
-        }
-      ],
-      limit: parseInt(limit),
-      offset: offset,
-      order: [[{ model: User, as: 'child' }, sort_by, sort_order]]
-    });
-
-    const totalPages = Math.ceil(count / limit);
-    const hasNextPage = page < totalPages;
-    const hasPrevPage = page > 1;
-
-    return {
-      success: true,
-      data: {
-        primaryContacts: rows,
-        pagination: {
-          currentPage: parseInt(page),
-          totalPages: totalPages,
-          totalCount: count,
-          hasNextPage: hasNextPage,
-          hasPrevPage: hasPrevPage,
-          limit: parseInt(limit)
-        }
-      },
-      message: SUCCESS_MESSAGES.FAMILY_DIRECTORY_FETCHED
-    };
-  } catch (err) {
-    console.error('Error in getFamilyDirectory:', err);
-    
-    if (err.name === 'SequelizeDatabaseError') {
-      throw new Error(ERROR_MESSAGES.SERVER_ERROR);
-    }
-    
-    throw new Error(ERROR_MESSAGES.SERVER_ERROR);
-  }
-};
-
 // Assign family head (key person)
 module.exports.assignFamilyHead = async (userId, transaction) => {
   try {
@@ -465,7 +252,6 @@ module.exports.assignFamilyHead = async (userId, transaction) => {
 
 // Helper function to build tree structure
 function buildTreeStructure(relationships, rootUserId = null) {
-  const tree = {};
   const processed = new Set();
 
   // Find root nodes (users with no parents or specified root)
@@ -549,3 +335,180 @@ function getInverseRelationship(relationshipType) {
 
   return inverseMap[relationshipType] || relationshipType;
 }
+
+// Unified family tree data retrieval with dynamic filtering
+module.exports.getFamilyTreeData = async (queryParams) => {
+  try {
+    const {
+      type = 'tree',
+      user_id,
+      name,
+      relationship_type,
+      birthdate_from,
+      birthdate_to,
+      is_primary_contact,
+      page = 1,
+      limit = 20,
+      sort_by = 'createdat',
+      sort_order = 'ASC'
+    } = queryParams;
+
+    // Build base where clause
+    const whereClause = { isdeleted: false };
+    const userWhereClause = { isdeleted: false };
+
+    // Handle different query types with unified logic
+    switch (type) {
+      case 'tree':
+        // For tree view, get relationships for specific user or all
+        if (user_id) {
+          whereClause[sequelize.Sequelize.Op.or] = [
+            { parent_id: user_id },
+            { child_id: user_id }
+          ];
+        }
+        break;
+
+      case 'directory':
+        // For directory, only get primary contacts
+        whereClause.is_primary_contact = true;
+        break;
+
+      case 'search':
+        // For search, apply all search filters
+        if (name) {
+          userWhereClause.fullname = {
+            [sequelize.Sequelize.Op.iLike]: `%${name}%`
+          };
+        }
+        if (relationship_type) {
+          whereClause.relationship_type = relationship_type;
+        }
+        if (birthdate_from || birthdate_to) {
+          userWhereClause.birthdate = {};
+          if (birthdate_from) userWhereClause.birthdate[sequelize.Sequelize.Op.gte] = birthdate_from;
+          if (birthdate_to) userWhereClause.birthdate[sequelize.Sequelize.Op.lte] = birthdate_to;
+        }
+        if (is_primary_contact !== undefined) {
+          whereClause.is_primary_contact = is_primary_contact;
+        }
+        break;
+
+      case 'relationships':
+        // For relationships, get all relationships for specific user
+        if (!user_id) {
+          throw new Error(ERROR_MESSAGES.USER_ID_REQUIRED);
+        }
+        whereClause[sequelize.Sequelize.Op.or] = [
+          { parent_id: user_id },
+          { child_id: user_id }
+        ];
+        break;
+    }
+
+    // Build include options
+    const includeOptions = [
+      {
+        model: User,
+        as: 'parent',
+        attributes: ['id', 'fullname', 'mobilenumber', 'profileimageurl', 'birthdate', 'gender', 'key_person_in_family', 'current_city', 'current_state', 'current_country'],
+        required: false
+      },
+      {
+        model: User,
+        as: 'child',
+        attributes: ['id', 'fullname', 'mobilenumber', 'profileimageurl', 'birthdate', 'gender', 'key_person_in_family', 'current_city', 'current_state', 'current_country'],
+        where: Object.keys(userWhereClause).length > 1 ? userWhereClause : undefined,
+        required: type === 'search' ? true : false
+      }
+    ];
+
+    // Build order clause
+    let orderClause;
+    if (type === 'directory') {
+      orderClause = [[{ model: User, as: 'child' }, sort_by, sort_order]];
+    } else if (type === 'search') {
+      orderClause = [['is_primary_contact', 'DESC'], ['createdat', 'ASC']];
+    } else {
+      orderClause = [['createdat', 'ASC']];
+    }
+
+    // Execute query with pagination for search and directory types
+    let result;
+    if (type === 'search' || type === 'directory') {
+      const offset = (page - 1) * limit;
+      
+      const { count, rows } = await FamilyTree.findAndCountAll({
+        where: whereClause,
+        include: includeOptions,
+        limit: parseInt(limit),
+        offset: offset,
+        order: orderClause
+      });
+
+      const totalPages = Math.ceil(count / limit);
+      const hasNextPage = page < totalPages;
+      const hasPrevPage = page > 1;
+
+      result = {
+        success: true,
+        data: {
+          relationships: rows,
+          pagination: {
+            currentPage: parseInt(page),
+            totalPages: totalPages,
+            totalCount: count,
+            hasNextPage: hasNextPage,
+            hasPrevPage: hasPrevPage,
+            limit: parseInt(limit)
+          }
+        },
+        message: type === 'search' ? SUCCESS_MESSAGES.FAMILY_MEMBERS_FOUND : SUCCESS_MESSAGES.FAMILY_DIRECTORY_FETCHED
+      };
+    } else {
+      // For tree and relationships, get all data without pagination
+      const relationships = await FamilyTree.findAll({
+        where: whereClause,
+        include: includeOptions,
+        order: orderClause
+      });
+
+      if (type === 'tree') {
+        // Build hierarchical tree structure
+        const treeStructure = buildTreeStructure(relationships, user_id);
+        result = {
+          success: true,
+          data: {
+            tree: treeStructure,
+            totalRelationships: relationships.length
+          },
+          message: SUCCESS_MESSAGES.FAMILY_TREE_FETCHED
+        };
+      } else {
+        result = {
+          success: true,
+          data: {
+            relationships: relationships,
+            totalCount: relationships.length
+          },
+          message: SUCCESS_MESSAGES.USER_RELATIONSHIPS_FETCHED
+        };
+      }
+    }
+
+    return result;
+  } catch (err) {
+    console.error('Error in getFamilyTreeData:', err);
+    
+    if (err.message === ERROR_MESSAGES.USER_ID_REQUIRED) {
+      throw err;
+    }
+    
+    if (err.name === 'SequelizeDatabaseError') {
+      throw new Error(ERROR_MESSAGES.SERVER_ERROR);
+    }
+    
+    throw new Error(ERROR_MESSAGES.SERVER_ERROR);
+  }
+};
+

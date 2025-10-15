@@ -1,20 +1,42 @@
-const familyTreeService = require('../services/familyTree.service');
+const {
+  getFamilyTreeData,
+  addFamilyMember,
+  updateFamilyMember,
+  removeFamilyMember,
+  assignFamilyHead
+} = require('../services/familyTree.service');
 const CODES = require('../utils/codes');
 const SUCCESS_MESSAGES = require('../utils/messages.success');
 const ERROR_MESSAGES = require('../utils/messages.error');
 const sequelize = require('../config/db');
 
-// Get complete family tree structure
-exports.getFamilyTree = async (req, res, next) => {
+// Unified family tree GET endpoint
+exports.getFamilyTreeData = async (req, res, next) => {
   try {
-    const { user_id } = req.query;
-    const result = await familyTreeService.getFamilyTree(user_id);
+    const { type, user_id, name, relationship_type, birthdate_from, birthdate_to, is_primary_contact, page, limit, sort_by, sort_order } = req.query;
+    
+    // Use the unified service function that handles all query types
+    const result = await getFamilyTreeData({
+      type,
+      user_id,
+      name,
+      relationship_type,
+      birthdate_from,
+      birthdate_to,
+      is_primary_contact,
+      page,
+      limit,
+      sort_by,
+      sort_order
+    });
+    
     return res.status(CODES.SUCCESS).json(result);
   } catch (err) {
-    console.error('Error in getFamilyTree controller:', err);
+    console.error('Error in getFamilyTreeData controller:', err);
     return next(err);
   }
 };
+
 
 // Add family member relationship
 exports.addFamilyMember = async (req, res, next) => {
@@ -26,7 +48,7 @@ exports.addFamilyMember = async (req, res, next) => {
       createdby: req.user.id // Get from authenticated user
     };
     
-    const result = await familyTreeService.addFamilyMember(relationshipData, transaction);
+    const result = await addFamilyMember(relationshipData, transaction);
     await transaction.commit();
     return res.status(CODES.CREATED).json(result);
   } catch (err) {
@@ -78,7 +100,7 @@ exports.updateFamilyMember = async (req, res, next) => {
       updatedby: req.user.id // Get from authenticated user
     };
     
-    const result = await familyTreeService.updateFamilyMember(id, updateData, transaction);
+    const result = await updateFamilyMember(id, updateData, transaction);
     await transaction.commit();
     return res.status(CODES.SUCCESS).json(result);
   } catch (err) {
@@ -109,7 +131,7 @@ exports.removeFamilyMember = async (req, res, next) => {
   
   try {
     const { id } = req.params;
-    const result = await familyTreeService.removeFamilyMember(id, transaction);
+    const result = await removeFamilyMember(id, transaction);
     await transaction.commit();
     return res.status(CODES.SUCCESS).json(result);
   } catch (err) {
@@ -126,29 +148,6 @@ exports.removeFamilyMember = async (req, res, next) => {
   }
 };
 
-// Search family members
-exports.searchFamilyMembers = async (req, res, next) => {
-  try {
-    const searchParams = req.query;
-    const result = await familyTreeService.searchFamilyMembers(searchParams);
-    return res.status(CODES.SUCCESS).json(result);
-  } catch (err) {
-    console.error('Error in searchFamilyMembers controller:', err);
-    return next(err);
-  }
-};
-
-// Get family directory (primary contacts)
-exports.getFamilyDirectory = async (req, res, next) => {
-  try {
-    const queryParams = req.query;
-    const result = await familyTreeService.getFamilyDirectory(queryParams);
-    return res.status(CODES.SUCCESS).json(result);
-  } catch (err) {
-    console.error('Error in getFamilyDirectory controller:', err);
-    return next(err);
-  }
-};
 
 // Assign family head (key person)
 exports.assignFamilyHead = async (req, res, next) => {
@@ -156,7 +155,7 @@ exports.assignFamilyHead = async (req, res, next) => {
   
   try {
     const { user_id } = req.body;
-    const result = await familyTreeService.assignFamilyHead(user_id, transaction);
+    const result = await assignFamilyHead(user_id, transaction);
     await transaction.commit();
     return res.status(CODES.SUCCESS).json(result);
   } catch (err) {
@@ -188,9 +187,6 @@ exports.getFamilyMember = async (req, res, next) => {
     
     const { FamilyTree } = require('../models/FamilyTree');
     const { User } = require('../models/User');
-    
-    // Import models to ensure associations are initialized
-    require('../models');
     
     const relationship = await FamilyTree.findOne({
       where: { id: id, isdeleted: false },
@@ -226,50 +222,3 @@ exports.getFamilyMember = async (req, res, next) => {
   }
 };
 
-// Get relationships for a specific user
-exports.getUserRelationships = async (req, res, next) => {
-  try {
-    const { user_id } = req.params;
-    
-    const { FamilyTree } = require('../models/FamilyTree');
-    const { User } = require('../models/User');
-    
-    // Import models to ensure associations are initialized
-    require('../models');
-    
-    const relationships = await FamilyTree.findAll({
-      where: {
-        [require('../config/db').Sequelize.Op.or]: [
-          { parent_id: user_id },
-          { child_id: user_id }
-        ],
-        isdeleted: false
-      },
-      include: [
-        {
-          model: User,
-          as: 'parent',
-          attributes: ['id', 'fullname', 'mobilenumber', 'profileimageurl', 'birthdate', 'gender', 'key_person_in_family']
-        },
-        {
-          model: User,
-          as: 'child',
-          attributes: ['id', 'fullname', 'mobilenumber', 'profileimageurl', 'birthdate', 'gender', 'key_person_in_family']
-        }
-      ],
-      order: [['createdat', 'ASC']]
-    });
-
-    return res.status(CODES.SUCCESS).json({
-      success: true,
-      data: {
-        relationships: relationships,
-        totalCount: relationships.length
-      },
-      message: SUCCESS_MESSAGES.USER_RELATIONSHIPS_FETCHED
-    });
-  } catch (err) {
-    console.error('Error in getUserRelationships controller:', err);
-    return next(err);
-  }
-};
